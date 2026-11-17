@@ -1,136 +1,115 @@
 -- Brainrot Bay: the conveyor spawner.
--- Brainrots wash ashore at the dock, stroll east along the beach,
--- and walk into the sea if nobody buys them. Each spawn rolls its
--- rarity from the ladder and its mutation from the table; during
--- Golden Hour the mutation chances triple.
+-- Brainrots wash in on the dock, ride the belt west to east, and fall
+-- off the end if nobody catches them. Spawn picks a rarity by weight,
+-- then a brainrot of that rarity, then rolls a mutation.
 
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local BrainrotModels = require(script.Parent:WaitForChild("BrainrotModels"))
+local BrainrotModels = require(script.Parent.BrainrotModels)
 
 local Spawner = {}
-Spawner.wild = {}
-Spawner.goldenHour = false
-Spawner.running = false
 
--- One wild brainrot: its definition, its mutation, its model, where
--- it is on the walk and how fast it strolls.
-function Spawner.spawnOne(parent)
-	local def = Config.rollBrainrot()
-	local mutation = Config.rollMutation(Spawner.goldenHour)
-	local start = Config.CONVEYOR_START
-	local model = BrainrotModels.buildBrainrot(def, mutation, start, math.rad(90))
-	model.Parent = parent
+local active = {}
+local nextId = 1
+local worldRef = nil
+local eventsRef = nil
+
+function Spawner.start(world, events)
+	worldRef = world
+	eventsRef = events
+	task.spawn(function()
+		while true do
+			local interval = Config.SpawnInterval * eventsRef.spawnIntervalFactor()
+			task.wait(interval)
+			if #active < Config.MaxOnConveyor then
+				Spawner.spawnOne()
+			end
+		end
+	end)
+	RunService.Heartbeat:Connect(function(dt)
+		Spawner.step(dt)
+	end)
+end
+
+function Spawner.spawnOne()
+	local def = Config.pickBrainrot()
+	local mutation = Config.rollMutation(eventsRef.forceGolden())
+	local model = BrainrotModels.build(def, mutation)
+	model.Parent = workspace
 	local entry = {
-		def = def,
-		mutation = mutation,
-		model = model,
-		distance = 0,
-		speed = def.walk,
-		bornAt = os.clock(),
+		Id = nextId,
+		Def = def,
+		Mutation = mutation,
+		Model = model,
+		From = worldRef.ConveyorWaypoints[1],
+		To = worldRef.ConveyorWaypoints[2],
+		Progress = 0,
 	}
-	table.insert(Spawner.wild, entry)
+	nextId = nextId + 1
+	table.insert(active, entry)
+	model:PivotTo(CFrame.new(entry.From))
 	return entry
 end
 
--- Move every wild brainrot one step east. A brainrot that reaches
--- the sea, or outlives its lifetime, is swept away.
-function Spawner.stepWild(dt)
-	local length = Config.CONVEYOR_END.X - Config.CONVEYOR_START.X
-	for index = #Spawner.wild, 1, -1 do
-		local entry = Spawner.wild[index]
-		if not entry.model.Parent then
-			table.remove(Spawner.wild, index)
+function Spawner.step(dt)
+	local distance = worldRef.ConveyorWaypoints[2].X - worldRef.ConveyorWaypoints[1].X
+	for i = #active, 1, -1 do
+		local entry = active[i]
+		entry.Progress = entry.Progress + Config.ConveyorSpeed * dt
+		if entry.Progress >= distance then
+			entry.Model:Destroy()
+			table.remove(active, i)
 		else
-			entry.distance = entry.distance + entry.speed * dt
-			local x = Config.CONVEYOR_START.X + entry.distance
-			local bob = math.sin(os.clock() * 6 + index) * 0.15
-			entry.model:PivotTo(CFrame.new(x, Config.CONVEYOR_START.Y + bob, Config.CONVEYOR_START.Z) * CFrame.Angles(0, math.rad(90), 0))
-			if entry.distance >= length or os.clock() - entry.bornAt > Config.CONVEYOR_LIFETIME then
-				Spawner.removeWild(entry)
-				table.remove(Spawner.wild, index)
-			end
+			local t = entry.Progress / distance
+			local pos = entry.From:lerp(entry.To, t)
+			local bob = math.sin(os.clock() * 3 + entry.Id) * 0.2
+			local spot = Vector3.new(pos.X, pos.Y + bob, pos.Z)
+			entry.Model:PivotTo(CFrame.lookAt(spot, Vector3.new(spot.X + 1, spot.Y, spot.Z)))
 		end
 	end
 end
 
-function Spawner.removeWild(entry)
-	if entry.model then
-		entry.model:Destroy()
-	end
-end
-
-function Spawner.removeEntry(entry)
-	for index, other in ipairs(Spawner.wild) do
-		if other == entry then
-			table.remove(Spawner.wild, index)
-			break
-		end
-	end
-	Spawner.removeWild(entry)
-end
-
--- The closest wild brainrot to a point, within a range.
-function Spawner.nearestWild(position, range)
+-- Nearest brainrot on the belt to a position, inside a range.
+function Spawner.nearest(position, range)
 	local best = nil
-	local bestDistance = range
-	for _, entry in ipairs(Spawner.wild) do
-		if entry.model.Parent and entry.model.PrimaryPart then
-			local distance = (entry.model.PrimaryPart.Position - position).Magnitude
-			if distance < bestDistance then
-				best = entry
-				bestDistance = distance
-			end
+	local bestDist = range
+	for _, entry in ipairs(active) do
+		local pivot = entry.Model:GetPivot()
+		local flat = Vector3.new(pivot.X - position.X, 0, pivot.Z - position.Z)
+		local dist = flat.Magnitude
+		if dist < bestDist then
+			bestDist = dist
+			best = entry
 		end
 	end
-	return best, bestDistance
+	return best
 end
 
--- Rain down a burst of rare-or-better brainrots for the event.
-function Spawner.rainBurst(parent, count)
-	for _ = 1, count do
-		local def = Config.rollBrainrot()
-		while def.rarity == "Common" do
-			def = Config.rollBrainrot()
+function Spawner.byId(id)
+	for _, entry in ipairs(active) do
+		if entry.Id == id then
+			return entry
 		end
-		local mutation = Config.rollMutation(Spawner.goldenHour)
-		local x = Config.CONVEYOR_START.X + math.random() * 200
-		local model = BrainrotModels.buildBrainrot(def, mutation, Vector3.new(x, Config.CONVEYOR_START.Y, Config.CONVEYOR_START.Z), math.rad(90))
-		model.Parent = parent
-		table.insert(Spawner.wild, {
-			def = def,
-			mutation = mutation,
-			model = model,
-			distance = x - Config.CONVEYOR_START.X,
-			speed = def.walk,
-			bornAt = os.clock(),
-		})
 	end
+	return nil
 end
 
--- The spawn loop: one new brainrot every few seconds, forever.
-function Spawner.start(parent)
-	if Spawner.running then
-		return
+-- Take an entry off the belt without destroying its model:
+-- the buyer keeps the model and places it on a base.
+function Spawner.remove(entry)
+	for i, other in ipairs(active) do
+		if other == entry then
+			table.remove(active, i)
+			return true
+		end
 	end
-	Spawner.running = true
-	task.spawn(function()
-		while true do
-			task.wait(Config.SPAWN_INTERVAL)
-			Spawner.spawnOne(parent)
-		end
-	end)
-	task.spawn(function()
-		local last = os.clock()
-		while true do
-			task.wait(0.1)
-			local now = os.clock()
-			Spawner.stepWild(now - last)
-			last = now
-		end
-	end)
+	return false
+end
+
+function Spawner.count()
+	return #active
 end
 
 return Spawner

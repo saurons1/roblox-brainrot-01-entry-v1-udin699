@@ -1,181 +1,186 @@
--- Brainrot Bay: the beach bases.
--- Eight bases ring the plaza. A player claims one on join; their
--- brainrots stand on its plots and earn money. The owner can lock
--- the base, which stops every steal until the lock runs out.
+-- Brainrot Bay: base plots, placement and locks.
+-- Each base holds twelve plot pads; six are open at first and the
+-- Plots upgrade opens two more per level. A pad tints to the rarity of
+-- the brainrot standing on it, and goes back to grey when emptied.
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local State = require(script.Parent:WaitForChild("State"))
-local Remotes = require(script.Parent:WaitForChild("Remotes"))
+local Config = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Config"))
+local State = require(script.Parent.State)
 
 local Bases = {}
-Bases.world = nil
-Bases.taken = {}
 
--- Claim the first free base for a player. Returns its index.
-function Bases.claimBase(player)
-	for index = 1, Config.BASE_COUNT do
-		if not Bases.taken[index] then
-			Bases.taken[index] = player
-			local base = Bases.world.bases[index]
-			if base then
-				base.signLabel.Text = player.DisplayName .. "'s BASE"
-			end
-			return index
+local plots = {}
+local worldRef = nil
+
+function Bases.setup(world)
+	worldRef = world
+	for index, base in ipairs(world.Bases) do
+		local list = {}
+		for i, position in ipairs(base.Plots) do
+			list[i] = {
+				Position = position,
+				Pad = base.PadParts[i],
+				Occupant = nil,
+			}
 		end
+		plots[index] = list
 	end
-	return 0
 end
 
-function Bases.releaseBase(player)
-	local record = State.get(player)
-	if not record then
+function Bases.plotCount()
+	return Config.PlotsMax
+end
+
+function Bases.freePlotIndex(player)
+	local base = State.baseOf(player)
+	if base == nil then
+		return nil
+	end
+	local list = plots[base]
+	local open = State.plotCount(player)
+	for i = 1, math.min(open, #list) do
+		if list[i].Occupant == nil then
+			return i
+		end
+	end
+	return nil
+end
+
+local function settleModel(model, position)
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.Anchored = true
+			part.CanCollide = false
+		end
+	end
+	model:PivotTo(CFrame.new(position))
+end
+
+function Bases.placeAt(baseIndex, plotIndex, def, mutation, model)
+	local list = plots[baseIndex]
+	if list == nil or list[plotIndex] == nil then
+		return false
+	end
+	local plot = list[plotIndex]
+	if plot.Occupant ~= nil then
+		return false
+	end
+	plot.Occupant = { Def = def, Mutation = mutation, Model = model }
+	settleModel(model, plot.Position)
+	plot.Pad.Color = Config.rarityColor(def.Rarity)
+	return true
+end
+
+function Bases.place(player, def, mutation, model)
+	local base = State.baseOf(player)
+	local slot = Bases.freePlotIndex(player)
+	if base == nil or slot == nil then
+		return false
+	end
+	return Bases.placeAt(base, slot, def, mutation, model)
+end
+
+-- Take the occupant off a plot and hand it back, pad reset to grey.
+function Bases.take(baseIndex, plotIndex)
+	local list = plots[baseIndex]
+	if list == nil or list[plotIndex] == nil then
+		return nil
+	end
+	local plot = list[plotIndex]
+	local occupant = plot.Occupant
+	if occupant == nil then
+		return nil
+	end
+	plot.Occupant = nil
+	plot.Pad.Color = Color3.fromRGB(210, 210, 210)
+	return occupant
+end
+
+function Bases.occupant(baseIndex, plotIndex)
+	local list = plots[baseIndex]
+	if list == nil or list[plotIndex] == nil then
+		return nil
+	end
+	return list[plotIndex].Occupant
+end
+
+-- Every plot on the island, for the steal search.
+function Bases.describePlots()
+	local out = {}
+	for baseIndex, list in ipairs(plots) do
+		for plotIndex, plot in ipairs(list) do
+			table.insert(out, {
+				Base = baseIndex,
+				Plot = plotIndex,
+				Position = plot.Position,
+				Occupant = plot.Occupant,
+				Owner = State.ownerOfBase(baseIndex),
+			})
+		end
+	end
+	return out
+end
+
+-- Everything earning on one player's base.
+function Bases.allPlaced(player)
+	local base = State.baseOf(player)
+	local out = {}
+	if base == nil then
+		return out
+	end
+	for _, plot in ipairs(plots[base]) do
+		if plot.Occupant ~= nil then
+			table.insert(out, plot.Occupant)
+		end
+	end
+	return out
+end
+
+-- Empty a whole base, destroying the models. Used by rebirth and by
+-- a player leaving, so no orphan brainrot keeps earning.
+function Bases.clearBase(player)
+	local base = State.baseOf(player)
+	if base == nil then
 		return
 	end
-	local index = record.baseIndex
-	if index > 0 and Bases.taken[index] == player then
-		Bases.taken[index] = nil
-		local base = Bases.world.bases[index]
-		if base then
-			base.signLabel.Text = "EMPTY BASE"
-			base.lockGui.Enabled = false
+	for _, plot in ipairs(plots[base]) do
+		if plot.Occupant ~= nil then
+			plot.Occupant.Model:Destroy()
+			plot.Occupant = nil
+			plot.Pad.Color = Color3.fromRGB(210, 210, 210)
 		end
 	end
-end
-
-function Bases.baseOf(player)
-	local record = State.get(player)
-	if not record or record.baseIndex < 1 then
-		return nil
-	end
-	return Bases.world.bases[record.baseIndex]
-end
-
-function Bases.ownerOf(index)
-	return Bases.taken[index]
-end
-
--- Is this player standing on their own base's platform?
-function Bases.onOwnBase(player)
-	local record = State.get(player)
-	if not record or record.baseIndex < 1 then
-		return false
-	end
-	local character = player.Character
-	if not character then
-		return false
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root then
-		return false
-	end
-	local base = Bases.world.bases[record.baseIndex]
-	local offset = root.Position - base.center
-	return math.abs(offset.X) <= 20 and math.abs(offset.Z) <= 20
-end
-
--- Is a position inside ANY base's platform? The tsunami spares those.
-function Bases.insideAnyBase(position)
-	for _, base in ipairs(Bases.world.bases) do
-		local offset = position - base.center
-		if math.abs(offset.X) <= 20 and math.abs(offset.Z) <= 20 then
-			return true
-		end
-	end
-	return false
-end
-
--- Place a brainrot model on a player's free plot. Returns the plot
--- index, or nil when the base is full.
-function Bases.placeOnPlot(player, model, def, mutation)
-	local record = State.get(player)
-	if not record then
-		return nil
-	end
-	local plotIndex = State.freePlot(player)
-	if not plotIndex then
-		return nil
-	end
-	local base = Bases.world.bases[record.baseIndex]
-	if not base then
-		return nil
-	end
-	local plotPosition = base.plots[plotIndex]
-	model:PivotTo(CFrame.new(plotPosition + Vector3.new(0, def.size.Y / 2 + 1, 0)))
-	model.Parent = base.folder
-	record.plots[plotIndex] = {
-		def = def,
-		mutation = mutation,
-		model = model,
-		rate = def.rate * mutation.mult,
-	}
-	table.insert(record.owned, record.plots[plotIndex])
-	-- A rival's touch steals it: watch the body from now on.
-	-- Required lazily here, since Steal requires Bases too.
-	require(script.Parent:WaitForChild("Steal")).watchPlot(player, plotIndex, record.plots[plotIndex])
-	return plotIndex
-end
-
--- Lift a brainrot off its owner's plot, for stealing or rebirth.
-function Bases.liftFromPlot(owner, plotIndex)
-	local record = State.get(owner)
-	if not record then
-		return nil
-	end
-	local entry = record.plots[plotIndex]
-	if not entry then
-		return nil
-	end
-	record.plots[plotIndex] = nil
-	for index, owned in ipairs(record.owned) do
-		if owned == entry then
-			table.remove(record.owned, index)
-			break
-		end
-	end
-	return entry
-end
-
--- Lock the caller's base. Steals stop until the lock runs out.
-function Bases.lockBase(player)
-	local record = State.get(player)
-	if not record then
-		return false, "no record"
-	end
-	local now = os.clock()
-	if now < record.lockReadyAt then
-		return false, "lock is cooling down"
-	end
-	record.lockUntil = now + Config.LOCK_TIME
-	record.lockReadyAt = now + Config.LOCK_TIME + Config.LOCK_COOLDOWN
-	local base = Bases.world.bases[record.baseIndex]
-	if base then
-		base.lockGui.Enabled = true
-		task.delay(Config.LOCK_TIME, function()
-			if base.lockGui then
-				base.lockGui.Enabled = false
-			end
-		end)
-	end
-	Remotes.broadcast("BaseLocked", player.DisplayName, Config.LOCK_TIME)
-	return true, "locked"
 end
 
 function Bases.isLocked(player)
 	local record = State.get(player)
-	if not record then
+	if record == nil then
 		return false
 	end
-	return os.clock() < record.lockUntil
+	return os.time() < record.LockUntil
 end
 
-function Bases.lockRemaining(player)
+function Bases.lockSecondsLeft(player)
 	local record = State.get(player)
-	if not record then
+	if record == nil then
 		return 0
 	end
-	return math.max(0, record.lockUntil - os.clock())
+	return math.max(0, record.LockUntil - os.time())
+end
+
+-- Lock the base for LockDuration seconds. The lock can only be raised
+-- again once the lock plus the cooldown have both run out.
+function Bases.toggleLock(player)
+	local record = State.get(player)
+	if record == nil then
+		return false, "no data"
+	end
+	local now = os.time()
+	if now < record.LockReadyAt then
+		return false, "Lock recharging: " .. tostring(record.LockReadyAt - now) .. "s"
+	end
+	record.LockUntil = now + Config.LockDuration
+	record.LockReadyAt = now + Config.LockDuration + Config.LockCooldown
+	return true, "Base locked for " .. tostring(Config.LockDuration) .. "s!"
 end
 
 return Bases

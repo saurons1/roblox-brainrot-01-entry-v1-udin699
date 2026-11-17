@@ -1,207 +1,153 @@
--- Brainrot Bay: the economy.
--- Money ticks once a second from every brainrot on every base.
--- Cash buys brainrots, upgrades and rebirths; rebirths multiply
--- all future earnings. The leaderboard board shows the top earners.
+-- Brainrot Bay: money tick, buying, rebirths and upgrades.
+-- Every second each placed brainrot pays its rate times its mutation,
+-- the owner's rebirth multiplier, the Boost upgrade and the running
+-- event. Buying takes the nearest brainrot in reach off the belt and
+-- puts it on the buyer's first free plot.
 
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local Format = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Format"))
-local State = require(script.Parent:WaitForChild("State"))
-local Remotes = require(script.Parent:WaitForChild("Remotes"))
-local Bases = require(script.Parent:WaitForChild("Bases"))
-local BrainrotModels = require(script.Parent:WaitForChild("BrainrotModels"))
-local Spawner = require(script.Parent:WaitForChild("Spawner"))
+local Config = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Config"))
+local Format = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Format"))
+local State = require(script.Parent.State)
 
 local Economy = {}
-Economy.running = false
-Economy.doubleMoney = false
 
--- One second of earnings for one player.
-function Economy.payPlayer(player)
-	local rate = State.effectiveRate(player)
-	if rate > 0 then
-		State.earn(player, rate * Config.MONEY_TICK)
-	end
-end
-
--- The tick loop: pay everyone, push their HUD numbers, refresh
--- the board every few ticks.
-function Economy.startTick()
-	if Economy.running then
-		return
-	end
-	Economy.running = true
-	local tick = 0
-	task.spawn(function()
-		while true do
-			task.wait(Config.MONEY_TICK)
-			tick = tick + 1
-			for _, player in ipairs(State.allPlayers()) do
-				Economy.payPlayer(player)
-				Remotes.send(player, "UpdateHud", Economy.hudState(player))
-			end
-			if tick % 5 == 0 then
-				Economy.refreshLeaderboard()
-			end
+local function placedRate(player, bases, events)
+	local total = 0
+	for _, item in ipairs(bases.allPlaced(player)) do
+		local mult = 1
+		if item.Mutation ~= nil then
+			mult = item.Mutation.Multiplier
 		end
-	end)
+		total = total + item.Def.Rate * mult
+	end
+	return total * State.earnMultiplier(player) * events.moneyMultiplier()
 end
 
--- Everything the HUD needs, in one table.
-function Economy.hudState(player)
+function Economy.snapshot(player, bases, events, tsunami)
 	local record = State.get(player)
-	if not record then
-		return {}
+	if record == nil then
+		return nil
 	end
 	return {
-		cash = record.cash,
-		rate = State.effectiveRate(player),
-		rebirths = record.rebirths,
-		mult = State.multiplier(player),
-		owned = State.plotCount(player),
-		plots = record.plotCount,
-		locked = Bases.isLocked(player),
-		lockLeft = Bases.lockRemaining(player),
-		upgrades = record.upgrades,
-		carrying = record.carrying ~= nil,
-		tsunamiLeft = require(script.Parent:WaitForChild("Tsunami")).secondsUntil(),
+		Money = record.Money,
+		Rate = placedRate(player, bases, events),
+		Rebirths = record.Rebirths,
+		Multiplier = record.Multiplier,
+		PlotsUsed = #bases.allPlaced(player),
+		PlotsMax = State.plotCount(player),
+		Upgrades = record.Upgrades,
+		Locked = bases.isLocked(player),
+		LockLeft = bases.lockSecondsLeft(player),
+		Carrying = record.Carrying ~= nil,
+		Event = events.currentName(),
+		TsunamiIn = tsunami.secondsUntil(),
 	}
 end
 
--- Buy the nearest wild brainrot on the conveyor. It walks to the
--- buyer's first free plot and starts earning at once.
-function Economy.buyBrainrot(player)
+function Economy.start(bases, events, tsunami, remotes)
+	task.spawn(function()
+		while true do
+			task.wait(Config.TickInterval)
+			for _, player in ipairs(State.allPlayers()) do
+				local earned = placedRate(player, bases, events)
+				if earned > 0 then
+					State.addMoney(player, earned)
+				end
+				local snapshot = Economy.snapshot(player, bases, events, tsunami)
+				if snapshot ~= nil then
+					remotes.StateUpdate:FireClient(player, snapshot)
+				end
+			end
+		end
+	end)
+end
+
+-- Buy the nearest brainrot in reach off the belt. If the base is full
+-- the money comes straight back and the model is destroyed.
+function Economy.buyNearest(player, spawner, bases)
 	local record = State.get(player)
-	if not record then
-		return false, "no record"
-	end
-	local now = os.clock()
-	if now < record.catchReadyAt then
-		return false, "catch is cooling down"
+	if record == nil then
+		return false, "no data"
 	end
 	local character = player.Character
-	if not character then
+	if character == nil then
 		return false, "no character"
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root then
+	if root == nil then
 		return false, "no character"
 	end
-	local entry, distance = Spawner.nearestWild(root.Position, State.catchRange(player))
-	if not entry then
-		return false, "no brainrot in reach"
+	local entry = spawner.nearest(root.Position, State.catchRange(player))
+	if entry == nil then
+		return false, "nothing in reach"
 	end
-	if record.cash < entry.def.price then
-		return false, "need " .. Format.money(entry.def.price)
+	local price = Config.priceOf(entry.Def)
+	if record.Money < price then
+		return false, "need " .. Format.money(price)
 	end
-	if not State.freePlot(player) then
-		return false, "base is full - buy more plots"
+	if not State.spend(player, price) then
+		return false, "need " .. Format.money(price)
 	end
-	record.catchReadyAt = now + Config.CATCH_COOLDOWN
-	State.spend(player, entry.def.price)
-	Spawner.removeEntry(entry)
-	local plotIndex = Bases.placeOnPlot(player, entry.model, entry.def, entry.mutation)
-	if not plotIndex then
-		State.earn(player, entry.def.price)
-		return false, "base is full - buy more plots"
+	spawner.remove(entry)
+	local ok = bases.place(player, entry.Def, entry.Mutation, entry.Model)
+	if not ok then
+		State.addMoney(player, price)
+		entry.Model:Destroy()
+		return false, "base is full"
 	end
-	Remotes.send(player, "BrainrotBought", entry.def.name, entry.mutation.name, entry.def.rate * entry.mutation.mult)
-	Remotes.send(player, "UpdateHud", Economy.hudState(player))
-	return true, "bought"
+	return true, "Caught " .. entry.Def.Name .. "!"
 end
 
--- Rebirth: wipe cash and brainrots for a permanent x2 multiplier.
-function Economy.rebirth(player)
+-- Rebirth: pay a cost that doubles each time, lose the base, gain a
+-- permanent earnings multiplier that grows by two each rebirth to x10.
+function Economy.rebirth(player, bases)
 	local record = State.get(player)
-	if not record then
-		return false, "no record"
+	if record == nil then
+		return false, "no data"
 	end
-	if record.mult >= Config.REBIRTH_MULT_MAX then
-		return false, "max rebirth multiplier reached"
-	end
-	local needed = Config.REBIRTH_BASE * (record.rebirths + 1)
-	if record.totalEarned < needed then
-		return false, "need " .. Format.money(needed) .. " total earned"
-	end
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not root or (root.Position - Config.TOTEM_POSITION).Magnitude > 14 then
-		return false, "stand at the Rebirth Totem to rebirth"
-	end
-	for plotIndex, entry in pairs(record.plots) do
-		if entry.model then
-			entry.model:Destroy()
-		end
-		record.plots[plotIndex] = nil
-	end
-	record.owned = {}
-	record.cash = Config.START_CASH
-	record.rebirths = record.rebirths + 1
-	record.mult = math.min(Config.REBIRTH_MULT_MAX, record.mult * Config.REBIRTH_MULT_STEP)
-	Remotes.send(player, "Notify", "REBIRTH! Your money multiplier is now x" .. record.mult)
-	Remotes.broadcast("Notify", player.DisplayName .. " rebirthed! Multiplier x" .. record.mult .. "!")
-	Remotes.send(player, "UpdateHud", Economy.hudState(player))
-	return true, "rebirthed"
-end
-
--- Buy one level of an upgrade at the stand. Costs grow per level.
-function Economy.buyUpgrade(player, key)
-	local record = State.get(player)
-	if not record then
-		return false, "no record"
-	end
-	local def = Config.UPGRADES[key]
-	if not def then
-		return false, "no such upgrade"
-	end
-	local level = record.upgrades[key] or 0
-	if level >= def.max then
-		return false, def.name .. " is maxed"
-	end
-	local cost = def.costs[level + 1]
-	if record.cash < cost then
+	local cost = Config.RebirthBaseCost * (2 ^ record.Rebirths)
+	if record.Money < cost then
 		return false, "need " .. Format.money(cost)
 	end
-	State.spend(player, cost)
-	record.upgrades[key] = level + 1
-	if key == "Plots" then
-		record.plotCount = record.plotCount + 2
+	if not State.spend(player, cost) then
+		return false, "need " .. Format.money(cost)
 	end
-	Remotes.send(player, "Notify", def.name .. " level " .. (level + 1) .. " bought!")
-	Remotes.send(player, "UpdateHud", Economy.hudState(player))
-	return true, "bought"
+	bases.clearBase(player)
+	State.applyRebirth(player)
+	return true, "Rebirth! Earnings x" .. tostring(record.Multiplier)
 end
 
--- The top three earners, written onto the board at the plaza.
-function Economy.refreshLeaderboard()
-	local records = State.allRecords()
-	table.sort(records, function(a, b)
-		return a.totalEarned > b.totalEarned
-	end)
-	local board = workspace:FindFirstChild("BrainrotBay")
-	if board then
-		board = board:FindFirstChild("LeaderboardBoard")
+-- Buy one level of an upgrade. Speed applies to the character at once.
+function Economy.buyUpgrade(player, name)
+	local record = State.get(player)
+	if record == nil then
+		return false, "no data"
 	end
-	if not board then
-		return
+	local def = Config.Upgrades[name]
+	if def == nil then
+		return false, "unknown upgrade"
 	end
-	local gui = board:FindFirstChild("LeaderboardGui")
-	if not gui then
-		return
+	local level = record.Upgrades[name]
+	if level >= def.MaxLevel then
+		return false, def.Name .. " is maxed out"
 	end
-	for slot = 1, 3 do
-		local line = gui:FindFirstChild("Rank" .. slot)
-		if line then
-			local record = records[slot]
-			if record then
-				line.Text = slot .. ". " .. record.player.DisplayName .. " - " .. Format.short(record.totalEarned)
-			else
-				line.Text = slot .. ". ---"
+	local cost = def.BaseCost * (def.CostGrowth ^ level)
+	if record.Money < cost then
+		return false, "need " .. Format.money(cost)
+	end
+	if not State.spend(player, cost) then
+		return false, "need " .. Format.money(cost)
+	end
+	record.Upgrades[name] = level + 1
+	if name == "Speed" then
+		local character = player.Character
+		if character ~= nil then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid ~= nil then
+				humanoid.WalkSpeed = State.walkSpeed(player)
 			end
 		end
 	end
+	return true, def.Name .. " level " .. tostring(level + 1)
 end
 
 return Economy

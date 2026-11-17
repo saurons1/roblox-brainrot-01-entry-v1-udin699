@@ -1,241 +1,141 @@
 -- Brainrot Bay: shared configuration.
--- The cast, the rarity ladder, prices, timings and world constants.
--- Both the server and the client read this one table, so a number
--- changed here changes the game everywhere at once.
+-- One table holds the whole cast, the rarities, the mutations, the
+-- timings and the upgrade ladder, so server and client agree on every
+-- number the game shows or charges.
 
 local Config = {}
 
-Config.GAME_NAME = "Brainrot Bay"
-Config.GAME_TAGLINE = "Catch absurd brainrots. Grow your base. Outrun the wave."
+Config.GameName = "Brainrot Bay"
+Config.StartMoney = 50
+Config.BaseCount = 8
+Config.PlotsPerBase = 6
+Config.PlotsMax = 12
+Config.PricePerRate = 15
 
--- Rarity ladder, weakest first. Weight is the share of conveyor spawns.
-Config.RARITIES = {
-	{ key = "Common", name = "Common", color = Color3.fromRGB(190, 190, 190), weight = 40 },
-	{ key = "Rare", name = "Rare", color = Color3.fromRGB(80, 160, 255), weight = 26 },
-	{ key = "Epic", name = "Epic", color = Color3.fromRGB(170, 90, 255), weight = 16 },
-	{ key = "Legendary", name = "Legendary", color = Color3.fromRGB(255, 180, 40), weight = 10 },
-	{ key = "Mythic", name = "Mythic", color = Color3.fromRGB(255, 70, 120), weight = 5 },
-	{ key = "God", name = "Brainrot God", color = Color3.fromRGB(255, 220, 0), weight = 2 },
-	{ key = "Secret", name = "Secret", color = Color3.fromRGB(0, 230, 190), weight = 1 },
+-- Rarities, lightest first. Weight is the share of spawns.
+Config.Rarities = {
+	{ Name = "Common", Weight = 40, Color = Color3.fromRGB(178, 178, 178) },
+	{ Name = "Rare", Weight = 25, Color = Color3.fromRGB(86, 178, 255) },
+	{ Name = "Epic", Weight = 15, Color = Color3.fromRGB(186, 92, 255) },
+	{ Name = "Legendary", Weight = 10, Color = Color3.fromRGB(255, 176, 32) },
+	{ Name = "Mythic", Weight = 6, Color = Color3.fromRGB(255, 92, 122) },
+	{ Name = "Brainrot God", Weight = 3, Color = Color3.fromRGB(255, 222, 0) },
+	{ Name = "Secret", Weight = 1, Color = Color3.fromRGB(0, 255, 200) },
 }
 
--- Mutations roll on every catch. Chance is a percent; mult multiplies $/s.
-Config.MUTATIONS = {
-	{ key = "Normal", name = "", color = Color3.fromRGB(255, 255, 255), chance = 87.8, mult = 1 },
-	{ key = "Golden", name = "Golden", color = Color3.fromRGB(255, 215, 0), chance = 8, mult = 2 },
-	{ key = "Diamond", name = "Diamond", color = Color3.fromRGB(120, 220, 255), chance = 3, mult = 5 },
-	{ key = "Rainbow", name = "Rainbow", color = Color3.fromRGB(255, 110, 220), chance = 1, mult = 10 },
-	{ key = "Void", name = "Void", color = Color3.fromRGB(140, 60, 255), chance = 0.2, mult = 25 },
+-- The cast. Rate is dollars per second. Price is Rate * PricePerRate.
+-- Body picks the silhouette, Accent picks the feature on top.
+Config.Brainrots = {
+	{ Name = "Soggy Cereal Sam", Rarity = "Common", Rate = 1, Body = "Ball", Color = Color3.fromRGB(224, 196, 138), Accent = Color3.fromRGB(255, 255, 255) },
+	{ Name = "Noodle Ned", Rarity = "Common", Rate = 2, Body = "Block", Color = Color3.fromRGB(240, 214, 120), Accent = Color3.fromRGB(200, 60, 60) },
+	{ Name = "Capybara Cappuccino", Rarity = "Rare", Rate = 5, Body = "Ball", Color = Color3.fromRGB(150, 110, 70), Accent = Color3.fromRGB(255, 240, 210) },
+	{ Name = "Sir Barksalot", Rarity = "Rare", Rate = 8, Body = "Block", Color = Color3.fromRGB(120, 150, 220), Accent = Color3.fromRGB(255, 220, 90) },
+	{ Name = "DJ Pickle", Rarity = "Epic", Rate = 15, Body = "Cylinder", Color = Color3.fromRGB(90, 200, 90), Accent = Color3.fromRGB(40, 40, 40) },
+	{ Name = "Grandma's WiFi Ghost", Rarity = "Epic", Rate = 25, Body = "Ball", Color = Color3.fromRGB(230, 230, 245), Accent = Color3.fromRGB(150, 180, 255) },
+	{ Name = "Moon Cheese Moose", Rarity = "Legendary", Rate = 50, Body = "Block", Color = Color3.fromRGB(250, 230, 140), Accent = Color3.fromRGB(140, 100, 40) },
+	{ Name = "Turbo Toilet Titan", Rarity = "Legendary", Rate = 80, Body = "Cylinder", Color = Color3.fromRGB(240, 240, 240), Accent = Color3.fromRGB(60, 140, 255) },
+	{ Name = "Professor Bubblebrain", Rarity = "Mythic", Rate = 150, Body = "Ball", Color = Color3.fromRGB(140, 220, 255), Accent = Color3.fromRGB(255, 140, 200) },
+	{ Name = "Emperor Eggplant", Rarity = "Mythic", Rate = 250, Body = "Block", Color = Color3.fromRGB(120, 50, 160), Accent = Color3.fromRGB(90, 220, 90) },
+	{ Name = "Lord Loopty-Loop", Rarity = "Brainrot God", Rate = 500, Body = "Ball", Color = Color3.fromRGB(255, 210, 0), Accent = Color3.fromRGB(255, 90, 90) },
+	{ Name = "The Forbidden Fridge", Rarity = "Secret", Rate = 1000, Body = "Block", Color = Color3.fromRGB(200, 230, 255), Accent = Color3.fromRGB(0, 220, 180) },
 }
 
--- The cast. rate is money per second; price is rate x 15.
--- shape: Block, Ball or Cylinder. accessory: Cup, Phones, Crown,
--- Ghost, Hat, Antenna or None. Every brainrot is built from parts
--- by BrainrotModels, so no catalog assets are needed.
-Config.BRAINROTS = {
-	{
-		id = "soggy-sam", name = "Soggy Cereal Sam", rarity = "Common", rate = 1,
-		shape = "Block", size = Vector3.new(2, 2.4, 2), body = Color3.fromRGB(214, 164, 110),
-		accessory = "None", walk = 6,
-		blurb = "Left in milk too long. Still crunchy about it.",
-	},
-	{
-		id = "noodle-ned", name = "Noodle Ned", rarity = "Common", rate = 2,
-		shape = "Cylinder", size = Vector3.new(2, 2.2, 2), body = Color3.fromRGB(240, 200, 90),
-		accessory = "Hat", walk = 7,
-		blurb = "A ramen cup that achieved sentience and regrets nothing.",
-	},
-	{
-		id = "capy-cappuccino", name = "Capybara Cappuccino", rarity = "Rare", rate = 5,
-		shape = "Block", size = Vector3.new(2.6, 2, 3), body = Color3.fromRGB(150, 105, 70),
-		accessory = "Cup", walk = 6,
-		blurb = "Chillest animal alive. Froths milk with its mind.",
-	},
-	{
-		id = "sir-barksalot", name = "Sir Barksalot", rarity = "Rare", rate = 8,
-		shape = "Block", size = Vector3.new(2.2, 2.4, 2.8), body = Color3.fromRGB(120, 90, 200),
-		accessory = "Hat", walk = 8,
-		blurb = "A dog in a suit. Barks in board meetings. Promoted twice.",
-	},
-	{
-		id = "dj-pickle", name = "DJ Pickle", rarity = "Epic", rate = 15,
-		shape = "Cylinder", size = Vector3.new(2, 3, 2), body = Color3.fromRGB(90, 200, 80),
-		accessory = "Phones", walk = 9,
-		blurb = "Drops beats, never drops the brine.",
-	},
-	{
-		id = "wifi-ghost", name = "Grandma's WiFi Ghost", rarity = "Epic", rate = 25,
-		shape = "Ball", size = Vector3.new(2.4, 2.8, 2.4), body = Color3.fromRGB(230, 235, 245),
-		accessory = "Ghost", walk = 7,
-		blurb = "Haunts your router. The password is always 'password'.",
-	},
-	{
-		id = "moon-moose", name = "Moon Cheese Moose", rarity = "Legendary", rate = 50,
-		shape = "Block", size = Vector3.new(3, 3.2, 3.4), body = Color3.fromRGB(250, 225, 130),
-		accessory = "Antenna", walk = 7,
-		blurb = "Made of moon cheese. Antlers pick up alien radio.",
-	},
-	{
-		id = "toilet-titan", name = "Turbo Toilet Titan", rarity = "Legendary", rate = 80,
-		shape = "Cylinder", size = Vector3.new(3, 2.6, 3), body = Color3.fromRGB(250, 215, 60),
-		accessory = "Crown", walk = 6,
-		blurb = "Flushes first, asks questions never.",
-	},
-	{
-		id = "prof-bubblebrain", name = "Professor Bubblebrain", rarity = "Mythic", rate = 150,
-		shape = "Ball", size = Vector3.new(3, 3, 3), body = Color3.fromRGB(255, 150, 200),
-		accessory = "Antenna", walk = 8,
-		blurb = "A brain in a jar. Published 400 papers. All about snacks.",
-	},
-	{
-		id = "emperor-eggplant", name = "Emperor Eggplant", rarity = "Mythic", rate = 250,
-		shape = "Block", size = Vector3.new(3.2, 3.6, 3), body = Color3.fromRGB(120, 50, 180),
-		accessory = "Crown", walk = 6,
-		blurb = "Rules the vegetable kingdom with an iron spatula.",
-	},
-	{
-		id = "lord-loopty", name = "Lord Loopty-Loop", rarity = "God", rate = 500,
-		shape = "Ball", size = Vector3.new(3.6, 3.6, 3.6), body = Color3.fromRGB(255, 140, 40),
-		accessory = "Crown", walk = 9,
-		blurb = "An infinite pretzel dragon. Loops forever. Tastes of victory.",
-	},
-	{
-		id = "forbidden-fridge", name = "The Forbidden Fridge", rarity = "Secret", rate = 1000,
-		shape = "Block", size = Vector3.new(3.4, 4.4, 2.6), body = Color3.fromRGB(180, 240, 255),
-		accessory = "Ghost", walk = 5,
-		blurb = "Do not open after midnight. It hums in four languages.",
-	},
+-- Mutations. Chance is a percentage of spawns; the first roll that hits wins.
+Config.Mutations = {
+	{ Name = "Golden", Multiplier = 2, Chance = 8, Color = Color3.fromRGB(255, 215, 0) },
+	{ Name = "Diamond", Multiplier = 5, Chance = 3, Color = Color3.fromRGB(180, 240, 255) },
+	{ Name = "Rainbow", Multiplier = 10, Chance = 1, Color = Color3.fromRGB(255, 120, 220) },
+	{ Name = "Void", Multiplier = 25, Chance = 0.2, Color = Color3.fromRGB(120, 40, 180) },
 }
 
-for _, def in ipairs(Config.BRAINROTS) do
-	def.price = def.rate * 15
+-- Timings, in seconds unless named otherwise.
+Config.SpawnInterval = 6
+Config.MaxOnConveyor = 8
+Config.ConveyorSpeed = 4
+Config.TickInterval = 1
+Config.TsunamiInterval = 120
+Config.TsunamiWarning = 10
+Config.LockDuration = 45
+Config.LockCooldown = 90
+Config.CatchRange = 10
+Config.SlapRange = 7
+Config.SlapCooldown = 3
+Config.EventIntervalMin = 90
+Config.EventIntervalMax = 150
+Config.EventDuration = 60
+Config.LeaderboardInterval = 5
+
+-- Rebirths: each one adds this multiplier, up to the cap.
+Config.RebirthBaseCost = 5000
+Config.RebirthStep = 2
+Config.RebirthMax = 10
+
+-- Upgrades: cost = BaseCost * CostGrowth ^ level.
+Config.Upgrades = {
+	Speed = { Name = "Speed", MaxLevel = 5, BaseCost = 250, CostGrowth = 2, Desc = "+2 walk speed per level" },
+	Range = { Name = "Range", MaxLevel = 5, BaseCost = 250, CostGrowth = 2, Desc = "+2 catch range per level" },
+	Plots = { Name = "Plots", MaxLevel = 3, BaseCost = 500, CostGrowth = 2, Desc = "+2 base plots per level" },
+	Boost = { Name = "Boost", MaxLevel = 4, BaseCost = 500, CostGrowth = 2, Desc = "+25% earnings per level" },
+}
+
+Config.Events = { "Brainrot Rain", "Double Money", "Golden Hour" }
+
+-- Prices are filled in from the rates so the two never drift apart.
+for _, brainrot in ipairs(Config.Brainrots) do
+	brainrot.Price = brainrot.Rate * Config.PricePerRate
 end
 
--- Timings, in seconds.
-Config.MONEY_TICK = 1
-Config.SPAWN_INTERVAL = 6
-Config.CONVEYOR_LIFETIME = 55
-Config.TSUNAMI_PERIOD = 120
-Config.TSUNAMI_WARNING = 10
-Config.TSUNAMI_WAVE_TIME = 8
-Config.LOCK_TIME = 45
-Config.LOCK_COOLDOWN = 90
-Config.EVENT_PERIOD = 300
-Config.EVENT_LENGTH = 60
-Config.SLAP_COOLDOWN = 3
-Config.CATCH_COOLDOWN = 1
+function Config.priceOf(brainrot)
+	return brainrot.Rate * Config.PricePerRate
+end
 
--- Money.
-Config.START_CASH = 50
-Config.REBIRTH_BASE = 100000
-Config.REBIRTH_MULT_STEP = 2
-Config.REBIRTH_MULT_MAX = 10
-
--- The island.
-Config.BASE_COUNT = 8
-Config.BASE_RADIUS = 115
-Config.PLOTS_PER_BASE = 8
-Config.PLOT_SIZE = Vector3.new(6, 1, 6)
-Config.CONVEYOR_START = Vector3.new(-165, 2, -165)
-Config.CONVEYOR_END = Vector3.new(165, 2, -165)
-Config.SPAWN_POINT = Vector3.new(0, 3, 30)
-Config.TOTEM_POSITION = Vector3.new(0, 0, -20)
-Config.UPGRADE_POSITION = Vector3.new(-24, 0, -20)
-
--- Catching and carrying.
-Config.CATCH_RANGE_BASE = 12
-Config.CARRY_SLOW = 0.6
-Config.CARRY_HEIGHT = 4.5
-
--- Upgrades sold at the Upgrade Stand. cost grows per level owned.
-Config.UPGRADES = {
-	Speed = {
-		name = "Walk Speed", desc = "+15% walk speed",
-		costs = { 500, 2500, 10000 }, max = 3,
-	},
-	Range = {
-		name = "Catch Range", desc = "+4 studs catch range",
-		costs = { 400, 2000, 8000 }, max = 3,
-	},
-	Plots = {
-		name = "Base Plots", desc = "+2 brainrot plots",
-		costs = { 1000, 5000 }, max = 2,
-	},
-	Boost = {
-		name = "Money Boost", desc = "x1.5 money forever",
-		costs = { 5000, 25000, 100000 }, max = 3,
-	},
-}
-
--- Timed island events. weight is the share of event rolls.
-Config.EVENTS = {
-	{ key = "Rain", name = "Brainrot Rain", desc = "Rare brainrots rain from the sky!", weight = 3 },
-	{ key = "Double", name = "Double Money", desc = "All earnings DOUBLED for 60 seconds!", weight = 4 },
-	{ key = "Golden", name = "Golden Hour", desc = "Mutation chances TRIPLED for 60 seconds!", weight = 3 },
-}
-
--- Lookups the rest of the game uses. Written once, here, so no
--- module repeats the search.
-function Config.rarityByKey(key)
-	for _, rarity in ipairs(Config.RARITIES) do
-		if rarity.key == key then
-			return rarity
+function Config.rarityColor(rarityName)
+	for _, rarity in ipairs(Config.Rarities) do
+		if rarity.Name == rarityName then
+			return rarity.Color
 		end
 	end
-	return Config.RARITIES[1]
+	return Color3.fromRGB(200, 200, 200)
 end
 
-function Config.brainrotById(id)
-	for _, def in ipairs(Config.BRAINROTS) do
-		if def.id == id then
-			return def
-		end
-	end
-	return nil
-end
-
-function Config.rollRarity()
+-- Pick a rarity by weight, then a brainrot of that rarity at random.
+function Config.pickBrainrot()
 	local total = 0
-	for _, rarity in ipairs(Config.RARITIES) do
-		total = total + rarity.weight
+	for _, rarity in ipairs(Config.Rarities) do
+		total = total + rarity.Weight
 	end
 	local roll = math.random() * total
-	for _, rarity in ipairs(Config.RARITIES) do
-		roll = roll - rarity.weight
+	local picked = Config.Rarities[1].Name
+	for _, rarity in ipairs(Config.Rarities) do
+		roll = roll - rarity.Weight
 		if roll <= 0 then
-			return rarity.key
+			picked = rarity.Name
+			break
 		end
 	end
-	return "Common"
+	local pool = {}
+	for _, brainrot in ipairs(Config.Brainrots) do
+		if brainrot.Rarity == picked then
+			table.insert(pool, brainrot)
+		end
+	end
+	return pool[math.random(1, #pool)]
 end
 
-function Config.rollMutation(goldenHour)
-	local roll = math.random() * 100
-	if goldenHour then
-		roll = roll / 3
+-- Roll a mutation. The first chance the roll falls inside wins.
+function Config.rollMutation(forceGolden)
+	if forceGolden then
+		return Config.Mutations[1]
 	end
-	local acc = 0
-	for _, mutation in ipairs(Config.MUTATIONS) do
-		acc = acc + mutation.chance
-		if roll <= acc then
+	local roll = math.random() * 100
+	local used = 0
+	for _, mutation in ipairs(Config.Mutations) do
+		used = used + mutation.Chance
+		if roll <= used then
 			return mutation
 		end
 	end
-	return Config.MUTATIONS[1]
-end
-
-function Config.rollBrainrot()
-	local rarityKey = Config.rollRarity()
-	local pool = {}
-	for _, def in ipairs(Config.BRAINROTS) do
-		if def.rarity == rarityKey then
-			table.insert(pool, def)
-		end
-	end
-	if #pool == 0 then
-		return Config.BRAINROTS[1]
-	end
-	return pool[math.random(1, #pool)]
+	return nil
 end
 
 return Config

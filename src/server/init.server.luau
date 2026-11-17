@@ -1,151 +1,135 @@
 -- Brainrot Bay: server boot.
--- Requires every module in order, builds the island, starts the
--- loops, and wires the remotes the client calls. Nothing else
--- runs on the server; every job lives in its own module.
+-- Requires every module in dependency order, builds the island, starts
+-- the loops, and handles players joining and leaving. The Catch remote
+-- is context sensitive: carrying places, near a rival plot steals, and
+-- near the conveyor buys.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Config = require(Shared:WaitForChild("Config"))
-local Server = script.Parent
+local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local State = require(script.Parent.State)
+local Remotes = require(script.Parent.Remotes)
+local World = require(script.Parent.World)
+local Spawner = require(script.Parent.Spawner)
+local Bases = require(script.Parent.Bases)
+local Economy = require(script.Parent.Economy)
+local Steal = require(script.Parent.Steal)
+local Tsunami = require(script.Parent.Tsunami)
+local Events = require(script.Parent.Events)
 
-local State = require(Server:WaitForChild("State"))
-local Remotes = require(Server:WaitForChild("Remotes"))
-local World = require(Server:WaitForChild("World"))
-local Bases = require(Server:WaitForChild("Bases"))
-local Spawner = require(Server:WaitForChild("Spawner"))
-local Economy = require(Server:WaitForChild("Economy"))
-local Steal = require(Server:WaitForChild("Steal"))
-local Tsunami = require(Server:WaitForChild("Tsunami"))
-local Events = require(Server:WaitForChild("Events"))
+local world = World.build()
+Bases.setup(world)
+Spawner.start(world, Events)
+Economy.start(Bases, Events, Tsunami, Remotes)
+Tsunami.start(world, Bases, Steal, Remotes)
+Events.start(Remotes)
 
-Remotes.init()
-local island = World.build()
-Bases.world = World
-Spawner.start(island)
-Economy.startTick()
-Tsunami.start(island)
-Events.start(island)
-
--- A joining player claims the first free base and gets a wallet.
-local function onPlayerAdded(player)
-	local baseIndex = Bases.claimBase(player)
-	local record = State.addPlayer(player, baseIndex)
-	local leaderstats = Instance.new("Folder")
-	leaderstats.Name = "leaderstats"
-	leaderstats.Parent = player
-	local cash = Instance.new("IntValue")
-	cash.Name = "Cash"
-	cash.Value = record.cash
-	cash.Parent = leaderstats
-	local rate = Instance.new("IntValue")
-	rate.Name = "$/s"
-	rate.Value = 0
-	rate.Parent = leaderstats
-	task.spawn(function()
-		while player.Parent do
-			task.wait(1)
-			local current = State.get(player)
-			if current then
-				cash.Value = math.floor(current.cash)
-				rate.Value = math.floor(State.effectiveRate(player))
-			end
-		end
-	end)
-	Remotes.send(player, "Notify", "Welcome to " .. Config.GAME_NAME .. "! Press E near a brainrot to buy it.")
-	Remotes.send(player, "UpdateHud", Economy.hudState(player))
+local function sendState(player)
+	local snapshot = Economy.snapshot(player, Bases, Events, Tsunami)
+	if snapshot ~= nil then
+		Remotes.StateUpdate:FireClient(player, snapshot)
+	end
 end
 
--- A leaving player frees their base and drops what they carry.
+local function onCharacter(player, character)
+	local root = character:WaitForChild("HumanoidRootPart")
+	local humanoid = character:WaitForChild("Humanoid")
+	humanoid.WalkSpeed = State.walkSpeed(player)
+	local base = State.baseOf(player)
+	if base ~= nil and world.Bases[base] ~= nil then
+		task.wait(0.2)
+		root.CFrame = CFrame.new(world.Bases[base].Spawn)
+	end
+	task.wait(0.5)
+	sendState(player)
+end
+
+local function onPlayerAdded(player)
+	State.create(player)
+	local base = State.baseOf(player)
+	if base ~= nil then
+		world.setBaseOwner(base, player.Name)
+	end
+	player.CharacterAdded:Connect(function(character)
+		onCharacter(player, character)
+	end)
+	sendState(player)
+end
+
 local function onPlayerRemoving(player)
 	local record = State.get(player)
-	if record and record.carrying then
-		Steal.dropCarried(player, "left the game")
+	if record ~= nil and record.Carrying ~= nil then
+		Steal.dropCarried(player, Bases)
 	end
-	for plotIndex, entry in pairs(record and record.plots or {}) do
-		if entry.model then
-			entry.model:Destroy()
-		end
-	end
-	Bases.releaseBase(player)
-	State.removePlayer(player)
-end
-
--- Keep walk speed honest: upgrades and carrying both change it.
-local function onCharacterAdded(player, character)
-	local humanoid = character:WaitForChild("Humanoid")
-	task.wait(0.5)
-	humanoid.WalkSpeed = State.walkSpeed(player)
-	humanoid.Died:Connect(function()
-		local record = State.get(player)
-		if record and record.carrying then
-			Steal.dropCarried(player, "got knocked out")
-		end
-	end)
+	Bases.clearBase(player)
+	State.remove(player)
 end
 
 Players.PlayerAdded:Connect(onPlayerAdded)
 Players.PlayerRemoving:Connect(onPlayerRemoving)
-Players.PlayerAdded:Connect(function(player)
-	player.CharacterAdded:Connect(function(character)
-		onCharacterAdded(player, character)
-	end)
-end)
 for _, player in ipairs(Players:GetPlayers()) do
 	onPlayerAdded(player)
-	player.CharacterAdded:Connect(function(character)
-		onCharacterAdded(player, character)
-	end)
 end
 
--- The remotes the client calls. Each answers with ok and a message
--- the client shows, and the server re-checks every rule itself.
-Remotes.get("CatchRequest").OnServerEvent:Connect(function(player)
-	local ok, message = Economy.buyBrainrot(player)
-	if not ok then
-		Remotes.send(player, "Notify", message)
+Remotes.Catch.OnServerEvent:Connect(function(player)
+	local record = State.get(player)
+	if record == nil then
+		return
 	end
-end)
-
-Remotes.get("PlaceRequest").OnServerEvent:Connect(function(player)
-	local ok, message = Steal.placeCarried(player)
-	if not ok then
-		Remotes.send(player, "Notify", message)
-	end
-end)
-
-Remotes.get("SlapRequest").OnServerEvent:Connect(function(player)
-	local ok, message = Steal.slap(player)
-	if not ok then
-		Remotes.send(player, "Notify", message)
-	end
-end)
-
-Remotes.get("LockRequest").OnServerEvent:Connect(function(player)
-	local ok, message = Bases.lockBase(player)
-	if ok then
-		Remotes.send(player, "Notify", "Base locked for " .. Config.LOCK_TIME .. "s!")
+	local ok, message
+	if record.Carrying ~= nil then
+		ok, message = Steal.placeCarried(player, Bases)
 	else
-		Remotes.send(player, "Notify", message)
+		ok, message = Steal.trySteal(player, Bases)
+		if not ok then
+			ok, message = Economy.buyNearest(player, Spawner, Bases)
+		end
 	end
+	Remotes.Notify:FireClient(player, message, ok and "ok" or "info")
+	sendState(player)
 end)
 
-Remotes.get("RebirthRequest").OnServerEvent:Connect(function(player)
-	local ok, message = Economy.rebirth(player)
-	if not ok then
-		Remotes.send(player, "Notify", message)
-	end
+Remotes.Slap.OnServerEvent:Connect(function(player)
+	local ok, message = Steal.slap(player, Bases)
+	Remotes.Notify:FireClient(player, message, ok and "ok" or "info")
+	sendState(player)
 end)
 
-Remotes.get("UpgradeRequest").OnServerEvent:Connect(function(player, key)
-	local ok, message = Economy.buyUpgrade(player, key)
-	if not ok then
-		Remotes.send(player, "Notify", message)
-	end
+Remotes.ToggleLock.OnServerEvent:Connect(function(player)
+	local ok, message = Bases.toggleLock(player)
+	Remotes.Notify:FireClient(player, message, ok and "ok" or "info")
+	sendState(player)
 end)
 
--- The client asks for a fresh snapshot when it boots.
-Remotes.get("GetState").OnServerInvoke = function(player)
-	return Economy.hudState(player)
-end
+Remotes.Rebirth.OnServerEvent:Connect(function(player)
+	local ok, message = Economy.rebirth(player, Bases)
+	Remotes.Notify:FireClient(player, message, ok and "ok" or "info")
+	sendState(player)
+end)
+
+Remotes.BuyUpgrade.OnServerEvent:Connect(function(player, name)
+	local ok, message = Economy.buyUpgrade(player, name)
+	Remotes.Notify:FireClient(player, message, ok and "ok" or "info")
+	sendState(player)
+end)
+
+-- Leaderboard refresh, top five by money.
+task.spawn(function()
+	while true do
+		task.wait(Config.LeaderboardInterval)
+		local rows = {}
+		for _, player in ipairs(State.allPlayers()) do
+			local record = State.get(player)
+			if record ~= nil then
+				table.insert(rows, { Name = player.Name, Money = record.Money })
+			end
+		end
+		table.sort(rows, function(a, b) return a.Money > b.Money end)
+		local lines = {}
+		for i = 1, math.min(5, #rows) do
+			table.insert(lines, tostring(i) .. ". " .. rows[i].Name .. "  $" .. tostring(math.floor(rows[i].Money)))
+		end
+		world.setLeaderboard(lines)
+	end
+end)

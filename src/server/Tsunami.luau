@@ -1,115 +1,87 @@
 -- Brainrot Bay: the tsunami.
--- Every two minutes the sea rises. Ten seconds of siren warning,
--- then a wall of water sweeps the island from north to south.
--- Bases are safe ground; anyone caught outside is washed back to
--- spawn and drops whatever they carry. Wild brainrots are swept
--- away with the wave.
+-- Every two minutes a wave sweeps the island. Ten seconds before it
+-- hits, everyone is warned and a wall of water starts rolling in from
+-- the north. When it lands, anyone caught outside their own base is
+-- washed back to their spawn and drops whatever they were carrying.
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
-local State = require(script.Parent:WaitForChild("State"))
-local Remotes = require(script.Parent:WaitForChild("Remotes"))
-local Bases = require(script.Parent:WaitForChild("Bases"))
-local Steal = require(script.Parent:WaitForChild("Steal"))
-local Spawner = require(script.Parent:WaitForChild("Spawner"))
+local Config = require(game:GetService("ReplicatedStorage"):WaitForChild("Shared"):WaitForChild("Config"))
+local State = require(script.Parent.State)
 
 local Tsunami = {}
-Tsunami.nextAt = 0
-Tsunami.wave = nil
-Tsunami.running = false
 
--- Build the wave wall once: a huge translucent slab, parked under
--- the island until the siren sounds.
-function Tsunami.buildWave(folder)
-	local wave = Instance.new("Part")
-	wave.Name = "TsunamiWave"
-	wave.Size = Vector3.new(520, 44, 12)
-	wave.Position = Vector3.new(0, -60, -260)
-	wave.Color = Color3.fromRGB(40, 110, 220)
-	wave.Material = Enum.Material.SmoothPlastic
-	wave.Transparency = 0.3
-	wave.Anchored = true
-	wave.CanCollide = false
-	wave.TopSurface = Enum.SurfaceType.Smooth
-	wave.BottomSurface = Enum.SurfaceType.Smooth
-	wave.Parent = folder
-	Tsunami.wave = wave
-	return wave
-end
+local nextAt = 0
 
--- Wash one player out: drop what they carry, send them to spawn.
-function Tsunami.washOut(player)
-	Steal.dropCarried(player, "washed away by the tsunami")
-	local character = player.Character
-	if not character then
-		return
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root then
-		root.CFrame = CFrame.new(Config.SPAWN_POINT)
-	end
-	Remotes.send(player, "Notify", "The tsunami washed you back to spawn!")
-end
-
--- Sweep the wave across the island. Anyone outside a base is washed.
-function Tsunami.sweep()
-	local wave = Tsunami.wave
-	if not wave then
-		return
-	end
-	Remotes.broadcast("TsunamiStart")
-	local steps = 40
-	for step = 1, steps do
-		local z = -260 + (520 * step / steps)
-		wave.Position = Vector3.new(0, 20, z)
-		for _, player in ipairs(State.allPlayers()) do
-			local character = player.Character
-			if character then
-				local root = character:FindFirstChild("HumanoidRootPart")
-				if root and math.abs(root.Position.Z - z) < 10 and not Bases.insideAnyBase(root.Position) then
-					Tsunami.washOut(player)
-				end
-			end
-		end
-		task.wait(Config.TSUNAMI_WAVE_TIME / steps)
-	end
-	wave.Position = Vector3.new(0, -60, -260)
-	for _, entry in ipairs(Spawner.wild) do
-		Spawner.removeWild(entry)
-	end
-	Spawner.wild = {}
-	Remotes.broadcast("TsunamiEnd")
-end
-
--- One full cycle: warn, then sweep, then schedule the next.
-function Tsunami.cycle()
-	Remotes.broadcast("TsunamiWarning", Config.TSUNAMI_WARNING)
-	task.wait(Config.TSUNAMI_WARNING)
-	Tsunami.sweep()
-	Tsunami.nextAt = os.clock() + Config.TSUNAMI_PERIOD
-end
-
-function Tsunami.start(folder)
-	if Tsunami.running then
-		return
-	end
-	Tsunami.running = true
-	Tsunami.buildWave(folder)
-	Tsunami.nextAt = os.clock() + Config.TSUNAMI_PERIOD
+function Tsunami.start(world, bases, steal, remotes)
+	nextAt = os.time() + Config.TsunamiInterval
+	local warned = false
 	task.spawn(function()
 		while true do
-			local waitFor = Tsunami.nextAt - os.clock()
-			if waitFor > 0 then
-				task.wait(waitFor)
+			task.wait(1)
+			local now = os.time()
+			if not warned and now >= nextAt - Config.TsunamiWarning then
+				warned = true
+				remotes.Notify:FireAllClients("TSUNAMI INCOMING — DASH HOME!", "warn")
+				Tsunami.showWave()
+			elseif now >= nextAt then
+				Tsunami.strike(world, bases, steal, remotes)
+				nextAt = os.time() + Config.TsunamiInterval
+				warned = false
 			end
-			Tsunami.cycle()
 		end
 	end)
 end
 
+-- A translucent wall that rolls from the north edge to the south edge
+-- over about twelve seconds.
+function Tsunami.showWave()
+	local wall = Instance.new("Part")
+	wall.Name = "TsunamiWave"
+	wall.Size = Vector3.new(220, 26, 4)
+	wall.Position = Vector3.new(0, 10, -110)
+	wall.Color = Color3.fromRGB(40, 140, 220)
+	wall.Material = Enum.Material.SmoothPlastic
+	wall.Transparency = 0.25
+	wall.Anchored = true
+	wall.CanCollide = false
+	wall.Parent = workspace
+	task.spawn(function()
+		for step = 1, 120 do
+			task.wait(0.1)
+			if wall.Parent == nil then
+				return
+			end
+			wall.Position = Vector3.new(0, 10, -110 + step * 2)
+		end
+		wall:Destroy()
+	end)
+end
+
+-- Wash everyone outside their own base back to its spawn.
+function Tsunami.strike(world, bases, steal, remotes)
+	remotes.Notify:FireAllClients("TSUNAMI! Swept away outside your base!", "warn")
+	for _, player in ipairs(State.allPlayers()) do
+		local base = State.baseOf(player)
+		local center = nil
+		if base ~= nil and world.Bases[base] ~= nil then
+			center = world.Bases[base].Center
+		end
+		local character = player.Character
+		local root = nil
+		if character ~= nil then
+			root = character:FindFirstChild("HumanoidRootPart")
+		end
+		if root ~= nil and center ~= nil then
+			local flat = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z)
+			if flat.Magnitude > 14 then
+				steal.dropCarried(player, bases)
+				root.CFrame = CFrame.new(world.Bases[base].Spawn)
+			end
+		end
+	end
+end
+
 function Tsunami.secondsUntil()
-	return math.max(0, Tsunami.nextAt - os.clock())
+	return math.max(0, nextAt - os.time())
 end
 
 return Tsunami
