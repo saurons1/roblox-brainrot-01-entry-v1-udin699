@@ -1,0 +1,1 @@
+{"steps":[{"screenshot":"1-start.jpg"},{"keys":["W"],"screenshot":"2-play.jpg","wait_ms":1000},{"keys":["E"],"screenshot":"3-steal.jpg","wait_ms":1000},{"keys":["S"],"screenshot":"4-tsunami.jpg","wait_ms":1000}],"tour":1}
